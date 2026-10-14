@@ -162,4 +162,3 @@ Guru_G_SI_Skill/
   <Elicitation label="कमज़ोर टॉपिक विश्लेषण (Weak-Area Diagnostic) जोड़ें" query="टेस्ट सबमिट होने पर माइक्रो-टॉपिक स्तर पर कमज़ोर क्षेत्रों का विश्लेषण और प्रोग्रेस हिस्ट्री दिखाने का कोड script.js में जोड़ें।"/>
   <Elicitation label="PWA को Android APK में पैक करें" query="हमारे SISKILL PWA को Capacitor के माध्यम से ऑफ़लाइन Android APK में बदलने की प्रक्रिया बताएं।"/>
 </ElicitationsGroup>
-
