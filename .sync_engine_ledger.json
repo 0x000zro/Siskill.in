@@ -1,0 +1,21 @@
+{
+  "entries": {
+    "Child_Development_and_Pedagogy/Topic_01_Growth_and_Development_Concepts/Subtopic_01_Meaning_and_Definitions/Micro_01_Growth_Meaning|mcq|e5bc44a5f58eb9096fb030e713f91bc64301cee37d1ab5836008ef1efc40c2dc": {
+      "archive_relative_path": "_quarantine/Child_Development_and_Pedagogy/Topic_01_Growth_and_Development_Concepts/Subtopic_01_Meaning_and_Definitions/Micro_01_Growth_Meaning/MCQ.invalid_20261013T091706Z_f0794ef0.txt",
+      "asset_kind": "mcq",
+      "duplicates_skipped": 0,
+      "error": "No valid questions parsed; skipped_blocks=0",
+      "input_relative_path": "Child_Development_and_Pedagogy/Topic_01_Growth_and_Development_Concepts/Subtopic_01_Meaning_and_Definitions/Micro_01_Growth_Meaning/MCQ.txt",
+      "items_added": 0,
+      "manifest_dirty": false,
+      "manifest_synced": false,
+      "micro_topic_id": "Micro_01_Growth_Meaning",
+      "output_relative_path": "Child_Development_and_Pedagogy/Topic_01_Growth_and_Development_Concepts/Subtopic_01_Meaning_and_Definitions/Micro_01_Growth_Meaning/MCQ.json",
+      "recorded_at": "2026-10-13T09:17:06+00:00",
+      "source_hash": "e5bc44a5f58eb9096fb030e713f91bc64301cee37d1ab5836008ef1efc40c2dc",
+      "status": "quarantined"
+    }
+  },
+  "schema_version": "1.0.0",
+  "updated_at": "2026-10-13T09:17:06+00:00"
+}
