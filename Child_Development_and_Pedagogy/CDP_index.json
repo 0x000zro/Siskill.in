@@ -37,9 +37,9 @@
   "schema_version": "1.0.0",
   "stats": {
     "total_mcqs": 30,
-    "total_pyqs": 37,
-    "total_questions": 67,
-    "last_synced": "2026-10-13T15:08:37.491451"
+    "total_pyqs": 97,
+    "total_questions": 127,
+    "last_synced": "2026-10-15T11:57:05.605764"
   },
   "status": "scaffolded",
   "subject": {
@@ -76,9 +76,9 @@
               "mcq_count": 30,
               "name_hi": "वृद्धि का अर्थ एवं स्वरूप",
               "order": 1,
-              "pyq_count": 37,
+              "pyq_count": 97,
               "slug": "Growth_Meaning",
-              "total_questions": 67
+              "total_questions": 127
             },
             {
               "assets": [

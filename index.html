@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1e3a8a">
+  <title>SISKILL - Super Intelligent Learning Skill</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+
+  <!-- Google Handwriting & Modern Devanagari Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Kalam:wght@400;700&family=Noto+Sans+Devanagari:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- टॉप नेविगेशन बार -->
+  <header class="navbar">
+    <div class="nav-left">
+      <button id="btn-toggle-sidebar" class="btn-icon" title="मेन्यू खोलें/बंद करें" aria-label="Toggle Menu">☰</button>
+      <div class="nav-brand">
+        <h2>SISKILL</h2>
+        <span class="tagline font-handwriting">Super Intelligent Learning Skill</span>
+      </div>
+    </div>
+
+    <div class="nav-search">
+      <input type="text" id="global-search" placeholder="765 माइक्रो-टॉपिक्स में खोजें (उदा. पियाजे, समास, भिन्न, NEP)...">
+    </div>
+
+    <div class="nav-actions">
+      <button id="btn-offline-all" class="btn-sync-offline" title="सभी 6 विषयों को ऑफ़लाइन सेव करें">📥 ऑफ़लाइन सेव</button>
+      <button id="btn-top-150-mock" class="btn-full-mock">🎯 150Q फुल मॉक</button>
+      <span id="network-badge" class="badge-online">ऑनलाइन</span>
+    </div>
+  </header>
+
+  <!-- मुख्य 2-पैनल लेआउट -->
+  <div class="app-body" id="app-body">
+    <!-- बायां साइडबार ट्री (Collapsible) -->
+    <aside class="sidebar-tree" id="sidebar-tree">
+      <div class="subject-pills" id="subject-selector"></div>
+      <div class="tree-container" id="tree-view">
+        <p class="loading-text">विषय सूची लोड हो रही है...</p>
+      </div>
+    </aside>
+
+    <!-- मुख्य फलक: एसेट रीडर & मॉक टेस्ट कंसोल -->
+    <main class="content-viewport" id="content-viewport">
+      <!-- अध्ययन हेडर रैपर -->
+      <div id="study-header-wrapper">
+        <nav class="breadcrumb-bar" id="breadcrumb">
+          <span>विषय चुनें</span>
+        </nav>
+
+        <div class="micro-header">
+          <div>
+            <h1 id="active-micro-title" class="font-handwriting">कृपया कोई माइक्रो-टॉपिक चुनें</h1>
+            <p id="active-micro-subtitle" class="subtitle">3,842 संकलित संसाधनों में से अध्ययन सामग्री लोड करें।</p>
+          </div>
+          <button id="btn-subject-30-mock" class="btn-sub-mock">⚡ विषय 30Q टेस्ट</button>
+        </div>
+
+        <!-- एसेट टैब्स -->
+        <div class="asset-tabs" id="asset-tabs">
+          <button class="tab-btn active" data-asset="Concept">📘 मुख्य अवधारणा</button>
+          <button class="tab-btn" data-asset="Short_Notes">📝 संक्षिप्त नोट्स</button>
+          <button class="tab-btn" data-asset="PYQ">🎯 विगत वर्ष प्रश्न (PYQ)</button>
+          <button class="tab-btn" data-asset="MCQ">💡 अभ्यास प्रश्न (MCQ)</button>
+          <button class="tab-btn tab-highlight" data-asset="Mock_Test">⏱️ टॉपिक 30Q टेस्ट</button>
+        </div>
+      </div>
+
+      <!-- डायनामिक कंटेंट एरिया -->
+      <div class="asset-display-area" id="asset-display">
+        <div class="empty-state">
+          <span style="font-size: 4rem;">📚</span>
+          <p class="font-handwriting" style="font-size: 1.6rem; margin-top: 1rem;">
+            बायें पैनल से किसी भी माइक्रो-टॉपिक पर क्लिक करके अध्ययन शुरू करें।
+          </p>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>

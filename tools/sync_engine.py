@@ -2,532 +2,372 @@
 # -*- coding: utf-8 -*-
 
 """
-SISKILL Unified Question Bank & Content Engine - Phase 2
-File: tools/sync_engine.py
-Function:
-  - Multi-asset monitor: MCQ.txt, PYQ.txt, Concept.txt, content.txt, Short_Notes.txt
-  - Bilingual resilient parser (MCQ / PYQ) with auto-increment ID append
-  - Hierarchical theory parser (Concept / content) with metadata, metrics & callouts
-  - Structured notes parser (Short_Notes) with key-term flashcards & categorization
-  - Safe atomic write (.tmp -> .json) and timestamped file archiving
+SISKILL Background Sync Engine (v3.5)
+Supports Rich Multi-line PYQ/MCQ Format (Tables, Assertion-Reason, Exam Refs,
+Difficulty tags, Multi-bullet Explanations) + Concept.txt + Short_Notes.txt
 """
 
 import os
+import sys
 import re
 import json
 import time
 from datetime import datetime
-from typing import Dict, List, Any, Optional, Tuple
 
-# ================= Configuration =================
-ROOT_DIR = "."  # रूट डायरेक्टरी पाथ
-POLL_INTERVAL_SECONDS = 3  # स्कैनिंग अंतराल (सेकंड)
+# Ensure local imports from tools/ work from any working directory
+TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
+if TOOLS_DIR not in sys.path:
+    sys.path.insert(0, TOOLS_DIR)
 
-# मॉनिटर की जाने वाली फाइलें, उनका आउटपुट और प्रोसेसिंग टाइप
-TARGET_CONFIG = {
-    "MCQ.txt": {"output": "MCQ.json", "type": "mcq", "mode": "append"},
-    "PYQ.txt": {"output": "PYQ.json", "type": "pyq", "mode": "append"},
-    "Concept.txt": {"output": "Concept.json", "type": "concept", "mode": "replace"},
-    "content.txt": {"output": "content.json", "type": "concept", "mode": "replace"},
-    "Short_Notes.txt": {"output": "Short_Notes.json", "type": "notes", "mode": "replace"}
+import index_tracker
+try:
+    import build_catalog
+except ImportError:
+    build_catalog = None
+
+ROOT_DIR = "."
+POLL_INTERVAL = 3
+
+TARGET_INPUTS = {
+    "MCQ.txt": ("MCQ.json", "mcq"),
+    "PYQ.txt": ("PYQ.json", "pyq"),
+    "Concept.txt": ("Concept.json", "concept"),
+    "Short_Notes.txt": ("Short_Notes.json", "short_notes")
 }
 
-# इनफिनिट लूप प्रोटेक्शन के लिए टाइमस्टैम्प कैश
-FILE_MTIME_CACHE: Dict[str, float] = {}
-
-# MCQ/PYQ मेटाडेटा टर्मिनेटर पैटर्न (हिंदी व अंग्रेजी कीवर्ड्स)
-TERMINATOR_PATTERN = (
-    r'(?='
-    r'Related Theory/Trend:|संबंधित सिद्धांत एवं परिप्रेक्ष्य:|संबंधित सिद्धांत:|'
-    r'Exam Trick/Common Confusion:|परीक्षा युक्ति एवं सामान्य भ्रम:|परीक्षा युक्ति:|'
-    r'Memory Tip:|स्मरण सूत्र:|'
-    r'Difficulty Rating:|कठिनाई स्तर:|'
-    r'Bloom Level:|ब्लूम का संज्ञानात्मक स्तर:|'
-    r'Competency Tested:|परीक्षित दक्षता:|'
-    r'Previous CTET Trend:|पूर्व सीटीईटी प्रवृत्ति:|'
-    r'Exam Name:|परीक्षा का नाम:|'
-    r'Exam Year:|परीक्षा वर्ष:|'
-    r'Paper:|प्रश्नपत्र:|'
-    r'\n*\s*(?:प्रश्न|Q|Question)\s*\d+'
-    r'|$)'
-)
-
-
-# ================= Shared Utilities =================
-
-def safe_read_file(file_path: str) -> str:
-    """UTF-8 और Windows BOM (utf-8-sig) को सुरक्षित तरीके से पढ़ता है।"""
-    with open(file_path, "r", encoding="utf-8-sig", errors="replace") as f:
-        return f.read().strip()
-
-
-def clean_text(text: str) -> str:
-    """अनावश्यक स्पेस और लाइन ब्रेक साफ़ करता है।"""
+def clean_math_symbols(text: str) -> str:
+    """LaTeX-style symbols को पठनीय यूनिकोड चिह्नों में बदलता है।"""
     if not text:
         return ""
-    return re.sub(r'\s+', ' ', text).strip()
-
-
-def calculate_read_metrics(text: str) -> Dict[str, int]:
-    """शब्द संख्या और पढ़ने में लगने वाले समय (150 WPM) की गणना करता है।"""
-    words = re.findall(r'\S+', text)
-    word_count = len(words)
-    return {
-        "word_count": word_count,
-        "reading_time_minutes": max(1, round(word_count / 150))
+    replacements = {
+        r"\times": "×",
+        r"\div": "÷",
+        r"\rightarrow": "→",
+        r"\leftarrow": "←",
+        r"\Rightarrow": "⇒",
+        r"\geq": "≥",
+        r"\leq": "≤",
+        r"\neq": "≠"
     }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    return text.strip()
 
 
-def extract_metadata_and_body(raw_text: str) -> Tuple[Dict[str, str], str]:
-    """टेक्स्ट के शीर्ष से की-वैल्यू मेटाडेटा निकालता है।"""
-    metadata = {}
+# ================= Concept & Short Notes Parser =================
+
+def parse_concept_text(file_path: str, micro_id: str) -> dict:
+    with open(file_path, "r", encoding="utf-8") as f:
+        raw_text = clean_math_symbols(f.read())
+
     lines = raw_text.splitlines()
-    body_start_idx = 0
-    meta_regex = re.compile(r'^(?:शीर्षक|अध्याय|Title|Topic|Category|Tags|महत्व|Difficulty)\s*[:\-]\s*(.*)$', re.IGNORECASE)
+    title = lines[0].replace("अध्याय:", "").strip() if lines else "अवधारणा विवरण"
 
-    for i, line in enumerate(lines):
+    sections = []
+    current_sec = None
+    sec_regex = re.compile(r"^(\d+)\.\s*(.*?)$")
+
+    for line in lines[1:]:
         line_clean = line.strip()
-        if not line_clean:
-            if metadata:
-                body_start_idx = i + 1
-                break
-            continue
-
-        match = meta_regex.match(line_clean)
+        match = sec_regex.match(line_clean)
         if match:
-            key = line_clean.split(":", 1)[0].split("-", 1)[0].strip().lower()
-            metadata[key] = match.group(1).strip()
+            if current_sec:
+                current_sec["content"] = "\n".join(current_sec["raw_lines"]).strip()
+                del current_sec["raw_lines"]
+                sections.append(current_sec)
+
+            current_sec = {
+                "id": int(match.group(1)),
+                "heading": match.group(2).strip(),
+                "raw_lines": []
+            }
+        elif current_sec:
+            current_sec["raw_lines"].append(line)
+
+    if current_sec:
+        current_sec["content"] = "\n".join(current_sec["raw_lines"]).strip()
+        del current_sec["raw_lines"]
+        sections.append(current_sec)
+
+    return {
+        "schema_version": "1.0.0",
+        "asset_type": "Concept",
+        "micro_topic_id": micro_id,
+        "title": title,
+        "sections": sections,
+        "content": raw_text
+    }
+
+
+def parse_short_notes_text(file_path: str, micro_id: str) -> dict:
+    with open(file_path, "r", encoding="utf-8") as f:
+        raw_text = clean_math_symbols(f.read())
+
+    lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
+    title = "संक्षिप्त रिवीजन नोट्स"
+    bullets = []
+
+    for l in lines:
+        if l.startswith("शीर्षक:") or l.startswith("Title:"):
+            title = l.split(":", 1)[1].strip()
+        elif l.startswith(("-", "•", "*")) or re.match(r"^\d+\.", l):
+            bullets.append(re.sub(r"^[-•*\d.]+\s*", "", l))
         else:
-            if i == 0 and line_clean.startswith("# "):
-                metadata["title"] = line_clean.lstrip("# ").strip()
-                body_start_idx = 1
-                break
-            body_start_idx = i
-            break
+            bullets.append(l)
 
-    remaining_body = "\n".join(lines[body_start_idx:]).strip()
-    return metadata, remaining_body
-
-
-# ================= 1. MCQ & PYQ Engine =================
-
-def parse_question_block(block: str, next_id: int) -> Optional[Dict[str, Any]]:
-    """द्विभाषी प्रारूप में एक प्रश्न ब्लॉक को पार्स करता है।"""
-    q_match = re.search(r'(?:प्रश्न|Q|Question)\s*\d+\s*[:.\-]?\s*\n*(.*?)(?=\(1\))', block, re.DOTALL)
-    if not q_match:
-        return None
-
-    question_text = clean_text(q_match.group(1))
-
-    # इनलाइन या अलग-अलग पंक्तियों वाले 4 विकल्प
-    opt1 = re.search(r'\(1\)\s*(.*?)(?=\(2\))', block, re.DOTALL)
-    opt2 = re.search(r'\(2\)\s*(.*?)(?=\(3\))', block, re.DOTALL)
-    opt3 = re.search(r'\(3\)\s*(.*?)(?=\(4\))', block, re.DOTALL)
-    opt4 = re.search(r'\(4\)\s*(.*?)(?=(?:Correct Answer:|सही उत्तर:|उत्तर:))', block, re.DOTALL)
-
-    if not (opt1 and opt2 and opt3 and opt4):
-        return None
-
-    options = {
-        "1": clean_text(opt1.group(1)),
-        "2": clean_text(opt2.group(1)),
-        "3": clean_text(opt3.group(1)),
-        "4": clean_text(opt4.group(1))
+    return {
+        "schema_version": "1.0.0",
+        "asset_type": "Short_Notes",
+        "micro_topic_id": micro_id,
+        "title": title,
+        "bullet_points": bullets
     }
 
-    ans_match = re.search(r'(?:Correct Answer:|सही उत्तर:|उत्तर:)\s*\(?([1-4A-Da-d])\)?', block)
-    if not ans_match:
-        return None
-    raw_ans = ans_match.group(1).strip()
-    ans_map = {'A': '1', 'B': '2', 'C': '3', 'D': '4', 'a': '1', 'b': '2', 'c': '3', 'd': '4'}
-    correct_answer = ans_map.get(raw_ans, raw_ans)
 
-    exp_pattern = rf'(?:Detailed Explanation:|विस्तृत संकल्पनात्मक विश्लेषण:|विस्तृत व्याख्या:)\s*(.*?){TERMINATOR_PATTERN}'
-    exp_match = re.search(exp_pattern, block, re.DOTALL)
-    if not exp_match:
-        return None
-    detailed_explanation = clean_text(exp_match.group(1))
+# ================= Rich PYQ & MCQ Multi-Line Parser =================
 
-    item = {
-        "id": next_id,
-        "question": question_text,
-        "options": options,
-        "correct_answer": correct_answer,
-        "detailed_explanation": detailed_explanation
-    }
+def parse_raw_file(file_path: str, start_id: int = 1) -> list:
+    """
+    उन्नत बहु-पंक्ति प्रश्न पार्सर:
+    - 'प्रश्न 1', 'प्रश्न 2' या 'Q1.' से ब्लॉक विभाजित करता है
+    - '* उत्तर:' से पहले के भाग से प्रश्न, परीक्षा संदर्भ, कठिनाई स्तर और 4 विकल्प निकालता है
+    - '* उत्तर:' के बाद के भाग से सही विकल्प और विस्तृत व्याख्या (गलत विकल्पों के विश्लेषण सहित) निकालता है
+    """
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = clean_math_symbols(f.read())
 
-    optional_patterns = [
-        ("related_theory", rf'(?:Related Theory/Trend:|संबंधित सिद्धांत एवं परिप्रेक्ष्य:|संबंधित सिद्धांत:)\s*(.*?){TERMINATOR_PATTERN}'),
-        ("exam_trick", rf'(?:Exam Trick/Common Confusion:|परीक्षा युक्ति एवं सामान्य भ्रम:|परीक्षा युक्ति:)\s*(.*?){TERMINATOR_PATTERN}'),
-        ("memory_tip", rf'(?:Memory Tip:|स्मरण सूत्र:)\s*(.*?){TERMINATOR_PATTERN}'),
-        ("difficulty_rating", rf'(?:Difficulty Rating:|कठिनाई स्तर:)\s*(.*?){TERMINATOR_PATTERN}'),
-        ("bloom_level", rf'(?:Bloom Level:|ब्लूम का संज्ञानात्मक स्तर:)\s*(.*?){TERMINATOR_PATTERN}'),
-        ("competency_tested", rf'(?:Competency Tested:|परीक्षित दक्षता:)\s*(.*?){TERMINATOR_PATTERN}'),
-        ("previous_trend", rf'(?:Previous CTET Trend:|पूर्व सीटीईटी प्रवृत्ति:)\s*(.*?){TERMINATOR_PATTERN}'),
-        ("exam_name", rf'(?:Exam Name:|परीक्षा का नाम:)\s*(.*?){TERMINATOR_PATTERN}'),
-        ("exam_year", rf'(?:Exam Year:|परीक्षा वर्ष:)\s*(.*?){TERMINATOR_PATTERN}'),
-        ("paper", rf'(?:Paper:|प्रश्नपत्र:)\s*(.*?)(?=$)')
-    ]
+    # 'प्रश्न 1', 'प्रश्न 2', 'प्र. 1', 'Q. 1' आदि से विभाजित करें
+    q_split_pattern = re.compile(
+        r"(?:^|\n)\s*(?:प्रश्न|प्र\.?|Q\.?|Question)\s*(\d+)\s*[:.\-]?\s*(?=\n|$|\"|')",
+        re.IGNORECASE
+    )
 
-    for key, pattern in optional_patterns:
-        match = re.search(pattern, block, re.DOTALL)
-        if match:
-            val = clean_text(match.group(1))
-            if val:
-                item[key] = val
+    matches = list(q_split_pattern.finditer(content))
+    if not matches:
+        # Fallback if question text starts on the same line after number
+        q_split_pattern = re.compile(
+            r"(?:^|\n)\s*(?:प्रश्न|प्र\.?|Q\.?|Question)\s*(\d+)\s*[:.\-]?\s*",
+            re.IGNORECASE
+        )
+        matches = list(q_split_pattern.finditer(content))
 
-    return item
-
-
-def parse_mcq_file(file_path: str, starting_id: int) -> List[Dict[str, Any]]:
-    """MCQ/PYQ फाइल को पढ़कर संरचित प्रश्नों की सूची देता है।"""
-    content = safe_read_file(file_path)
-    raw_blocks = re.split(r'(?=(?:^|\n)\s*(?:प्रश्न|Q|Question)\s*\d+)', content.strip())
     parsed_questions = []
-    current_id = starting_id
+    current_id = start_id
 
-    for block in raw_blocks:
-        if not block.strip():
+    # पैटर्न: उत्तर लाइन से विभाजित करने के लिए
+    ans_split_regex = re.compile(
+        r"\n\s*(?:[*•\-]\s*)?(?:सही\s+)?(?:उत्तर|Answer|Ans)\s*[:\-]\s*",
+        re.IGNORECASE
+    )
+
+    # विकल्प पैटर्न: केवल लाइन की शुरुआत में (A), (B), (C), (D)
+    opt_line_regex = re.compile(r"^\s*\(?([A-D])\)?[.)]?\s+(.+)$")
+
+    for idx, match in enumerate(matches):
+        block_start = match.end()
+        block_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(content)
+        block = content[block_start:block_end].strip()
+
+        if not block:
             continue
-        q_obj = parse_question_block(block, current_id)
-        if q_obj:
-            parsed_questions.append(q_obj)
-            current_id += 1
+
+        # 1. उत्तर लाइन से ब्लॉक को दो हिस्सों (प्रश्न+विकल्प बनाम उत्तर+व्याख्या) में बाँटें
+        ans_split = ans_split_regex.split(block, maxsplit=1)
+        if len(ans_split) < 2:
+            continue
+
+        pre_ans_part = ans_split[0].strip()
+        post_ans_part = ans_split[1].strip()
+
+        # 2. pre_ans_part से प्रश्न, मेटाडेटा और 4 विकल्प निकालें
+        q_lines = []
+        options = {}
+        exam_ref = ""
+        difficulty = ""
+        in_options = False
+
+        for line in pre_ans_part.splitlines():
+            raw_line = line.strip()
+            if not raw_line:
+                continue
+
+            # परीक्षा संदर्भ पहचानें
+            if "परीक्षा संदर्भ" in raw_line or "Exam Ref" in raw_line:
+                cleaned_ref = re.sub(r"^\(?गत वर्ष परीक्षा संदर्भ\s*[:\-]\s*|\)$", "", raw_line).strip()
+                exam_ref = cleaned_ref
+                continue
+
+            # कठिनाई स्तर पहचानें
+            if raw_line.startswith("कठिनाई स्तर") or raw_line.startswith("Difficulty"):
+                difficulty = raw_line.split(":", 1)[-1].strip() if ":" in raw_line else raw_line
+                continue
+
+            # विकल्प (A), (B), (C), (D) पहचानें (केवल तब जब लाइन (A)/(B)/(C)/(D) से शुरू हो)
+            opt_match = re.match(r"^\s*\(([A-D])\)\s*(.+)$", raw_line)
+            if not opt_match:
+                opt_match = re.match(r"^\s*([A-D])[.)]\s+(.+)$", raw_line)
+
+            if opt_match:
+                opt_key = opt_match.group(1).upper()
+                opt_val = opt_match.group(2).strip()
+                options[opt_key] = opt_val
+                in_options = True
+            else:
+                if in_options and options:
+                    # यदि किसी विकल्प का टेक्स्ट अगली लाइन में जारी हो
+                    last_key = list(options.keys())[-1]
+                    options[last_key] += " " + raw_line
+                else:
+                    q_lines.append(raw_line)
+
+        question_text = "\n".join(q_lines).strip()
+
+        # 3. post_ans_part से सही उत्तर (A/B/C/D) और विस्तृत व्याख्या निकालें
+        post_lines = post_ans_part.splitlines()
+        first_ans_line = post_lines[0].strip() if post_lines else ""
+        ans_letter_match = re.search(r"([A-Da-d])", first_ans_line)
+        if not ans_letter_match or len(options) < 2:
+            continue
+
+        correct_answer = ans_letter_match.group(1).upper()
+
+        # शेष लाइनों से विस्तृत व्याख्या तैयार करें
+        exp_lines = []
+        for eline in post_lines[1:]:
+            s_line = eline.strip()
+            if not s_line:
+                continue
+            # '* विस्तृत व्याख्या:' हटाएँ, पर अंदर के बुलेट्स सुरक्षित रखें
+            s_line = re.sub(r"^[*•\-]\s*विस्तृत व्याख्या\s*[:\-]?\s*", "", s_line)
+            s_line = re.sub(r"^[*•\-]\s*(अन्य विकल्प क्यों गलत हैं\?)", r"\n🔍 \1", s_line)
+            if s_line.startswith("* (") or s_line.startswith("• ("):
+                s_line = "  • " + s_line.lstrip("*• ").strip()
+            elif s_line.startswith("*") or s_line.startswith("•"):
+                s_line = "• " + s_line.lstrip("*• ").strip()
+            if s_line:
+                exp_lines.append(s_line)
+
+        detailed_explanation = "\n".join(exp_lines).strip()
+
+        q_obj = {
+            "id": current_id,
+            "question": question_text,
+            "options": options,
+            "correct_answer": correct_answer,
+            "detailed_explanation": detailed_explanation
+        }
+        if exam_ref:
+            q_obj["exam_reference"] = exam_ref
+        if difficulty:
+            q_obj["difficulty"] = difficulty
+
+        parsed_questions.append(q_obj)
+        current_id += 1
 
     return parsed_questions
 
 
-# ================= 2. Concept & Theory Engine =================
+# ================= File Processor & Daemon Loop =================
 
-def extract_callouts(text: str) -> List[Dict[str, str]]:
-    """नोट्स और परीक्षा युक्तियों (💡/Note:) को अलग करता है।"""
-    callouts = []
-    pattern = re.compile(r'(?:>|💡|NOTE:|नोट:|टिप:|स्मरण:)\s*(.*?)(?=\n\n|\n[#>💡]|$)', re.IGNORECASE | re.DOTALL)
-    for m in pattern.finditer(text):
-        val = m.group(1).strip()
-        if val:
-            callouts.append({
-                "type": "tip" if any(w in m.group(0).lower() for w in ["💡", "टिप", "tip"]) else "note",
-                "text": re.sub(r'\s+', ' ', val)
-            })
-    return callouts
+def process_file(dirpath: str, input_filename: str, output_info):
+    if isinstance(output_info, tuple):
+        output_filename, asset_kind = output_info
+    else:
+        output_filename, asset_kind = output_info, ("mcq" if "MCQ" in output_filename else "pyq")
 
-
-def parse_concept_text(file_path: str, micro_id: str) -> Dict[str, Any]:
-    """Concept.txt या content.txt को संरचित थ्योरी JSON में बदलता है।"""
-    raw_text = safe_read_file(file_path)
-    if not raw_text:
-        return {}
-
-    meta, body = extract_metadata_and_body(raw_text)
-    title = meta.get("title") or meta.get("शीर्षक") or meta.get("अध्याय") or "अवधारणा विवरण"
-
-    lines = body.splitlines()
-    sections: List[Dict[str, Any]] = []
-    current_sec: Optional[Dict[str, Any]] = None
-    pre_section_lines: List[str] = []
-    sec_counter = 1
-
-    header_regex = re.compile(r'^(?:#{1,3}\s*(.*?)|(\d+)[\.\:\-\)]\s+(.*?))$')
-
-    for line in lines:
-        line_clean = line.strip()
-        match = header_regex.match(line_clean)
-        is_heading = False
-        heading_title = ""
-        heading_id = sec_counter
-
-        if match and len(line_clean) <= 120 and not line_clean.endswith(('।', '.', '?')):
-            if match.group(1):
-                heading_title = match.group(1).strip()
-                is_heading = True
-            elif match.group(3):
-                heading_title = match.group(3).strip()
-                try:
-                    heading_id = int(match.group(2))
-                except ValueError:
-                    heading_id = sec_counter
-                is_heading = True
-
-        if is_heading:
-            if current_sec:
-                raw_sec = "\n".join(current_sec.pop("raw_lines")).strip()
-                current_sec["content"] = raw_sec
-                current_sec["callouts"] = extract_callouts(raw_sec)
-                sections.append(current_sec)
-            elif pre_section_lines:
-                ov_text = "\n".join(pre_section_lines).strip()
-                if ov_text:
-                    sections.append({
-                        "id": 0,
-                        "heading": "प्रस्तावना / Overview",
-                        "content": ov_text,
-                        "callouts": extract_callouts(ov_text)
-                    })
-
-            current_sec = {
-                "id": heading_id,
-                "heading": heading_title,
-                "raw_lines": []
-            }
-            sec_counter += 1
-        else:
-            if current_sec:
-                current_sec["raw_lines"].append(line)
-            else:
-                pre_section_lines.append(line)
-
-    if current_sec:
-        raw_sec = "\n".join(current_sec.pop("raw_lines")).strip()
-        current_sec["content"] = raw_sec
-        current_sec["callouts"] = extract_callouts(raw_sec)
-        sections.append(current_sec)
-    elif pre_section_lines and not sections:
-        full_text = "\n".join(pre_section_lines).strip()
-        sections.append({
-            "id": 1,
-            "heading": "मुख्य अवधारणा",
-            "content": full_text,
-            "callouts": extract_callouts(full_text)
-        })
-
-    metrics = calculate_read_metrics(raw_text)
-    plain_preview = re.sub(r'[\#\*\-\`]', '', body).strip().replace('\n', ' ')
-    summary_preview = plain_preview[:160] + "..." if len(plain_preview) > 160 else plain_preview
-
-    return {
-        "schema_version": "2.0.0",
-        "asset_type": "Concept",
-        "micro_topic_id": micro_id,
-        "title": title,
-        "metrics": metrics,
-        "summary_preview": summary_preview,
-        "sections_count": len(sections),
-        "sections": sections,
-        "content": raw_text,
-        "last_updated": datetime.now().isoformat()
-    }
-
-
-# ================= 3. Short Notes Engine =================
-
-def parse_short_notes_text(file_path: str, micro_id: str) -> Dict[str, Any]:
-    """Short_Notes.txt को संरचित बुलेट्स और की-टर्म्स में बदलता है।"""
-    raw_text = safe_read_file(file_path)
-    if not raw_text:
-        return {}
-
-    meta, body = extract_metadata_and_body(raw_text)
-    title = meta.get("title") or meta.get("शीर्षक") or "संक्षिप्त रिवीजन नोट्स"
-
-    bullet_marker_regex = re.compile(r'^(?:[-•*+]|\d+[\.\)])\s+(.*)$')
-    group_heading_regex = re.compile(r'^(?:#{1,3}\s*(.*?)|([A-Za-z0-9\u0900-\u097F\s]{2,40})[:\-]\s*)$')
-
-    groups: List[Dict[str, Any]] = []
-    current_group_title = "महत्वपूर्ण बिंदु"
-    current_group_points: List[str] = []
-    all_flat_bullets: List[str] = []
-    key_terms: List[Dict[str, str]] = []
-
-    lines = body.splitlines()
-    i = 0
-    n = len(lines)
-
-    while i < n:
-        line_clean = lines[i].strip()
-        if not line_clean:
-            i += 1
-            continue
-
-        heading_match = group_heading_regex.match(line_clean)
-        if heading_match and not bullet_marker_regex.match(line_clean) and len(line_clean) < 60:
-            if current_group_points:
-                groups.append({"category": current_group_title, "points": current_group_points})
-                current_group_points = []
-            current_group_title = (heading_match.group(1) or heading_match.group(2) or line_clean).strip().rstrip(":-")
-            i += 1
-            continue
-
-        b_match = bullet_marker_regex.match(line_clean)
-        if b_match:
-            bullet_text = b_match.group(1).strip()
-            i += 1
-            continuation_lines = []
-            while i < n:
-                next_line = lines[i].strip()
-                if not next_line:
-                    i += 1
-                    break
-                if not bullet_marker_regex.match(next_line) and not group_heading_regex.match(next_line):
-                    continuation_lines.append(next_line)
-                    i += 1
-                else:
-                    break
-
-            if continuation_lines:
-                bullet_text += " " + " ".join(continuation_lines)
-
-            bullet_text = re.sub(r'\s+', ' ', bullet_text).strip()
-            current_group_points.append(bullet_text)
-            all_flat_bullets.append(bullet_text)
-
-            term_match = re.match(r'^(?:\*\*(.*?)\*\*|(.*?))\s*[:\-—]\s*(.*)$', bullet_text)
-            if term_match:
-                term_name = (term_match.group(1) or term_match.group(2)).strip()
-                term_desc = term_match.group(3).strip()
-                if 2 <= len(term_name) <= 50 and len(term_desc) > 5:
-                    key_terms.append({"term": term_name, "definition": term_desc})
-        else:
-            current_group_points.append(line_clean)
-            all_flat_bullets.append(line_clean)
-            i += 1
-
-    if current_group_points:
-        groups.append({"category": current_group_title, "points": current_group_points})
-
-    metrics = calculate_read_metrics(raw_text)
-
-    return {
-        "schema_version": "2.0.0",
-        "asset_type": "Short_Notes",
-        "micro_topic_id": micro_id,
-        "title": title,
-        "metrics": metrics,
-        "total_points": len(all_flat_bullets),
-        "groups": groups,
-        "key_terms": key_terms,
-        "bullet_points": all_flat_bullets,
-        "last_updated": datetime.now().isoformat()
-    }
-
-
-# ================= Core Dispatcher & File Sync =================
-
-def process_file(dirpath: str, input_filename: str, cfg: Dict[str, str]):
-    """इनपुट फाइल के प्रकार के अनुसार उसे पार्स, सेव और आर्काइव करता है।"""
     input_path = os.path.join(dirpath, input_filename)
-    output_path = os.path.join(dirpath, cfg["output"])
+    output_path = os.path.join(dirpath, output_filename)
     micro_id = os.path.basename(dirpath)
 
-    # 1. MTime और पार्शियल राइट प्रोटेक्शन
     try:
-        current_mtime = os.path.getmtime(input_path)
-        if FILE_MTIME_CACHE.get(input_path) == current_mtime:
-            return
-
         initial_size = os.path.getsize(input_path)
-        time.sleep(0.5)
+        time.sleep(0.4)
         if os.path.getsize(input_path) != initial_size:
-            print(f"[WAIT] File is being written: {input_path}")
+            print(f"[WAIT] File is still being written: {input_path}")
             return
     except OSError:
         return
 
-    print(f"\n[DETECTED] New input file found: {input_path}")
-    asset_type = cfg["type"]
-    mode = cfg["mode"]
+    if asset_kind == "concept":
+        final_data = parse_concept_text(input_path, micro_id)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(final_data, f, ensure_ascii=False, indent=2)
+        print(f"[SUCCESS] Generated Concept JSON: {output_path}")
 
-    # 2. रूटिंग एवं पार्सिंग
-    if asset_type in ("mcq", "pyq"):
-        starting_id = 1
+    elif asset_kind == "short_notes":
+        final_data = parse_short_notes_text(input_path, micro_id)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(final_data, f, ensure_ascii=False, indent=2)
+        print(f"[SUCCESS] Generated Short_Notes JSON: {output_path}")
+
+    else:
         existing_data = {
             "micro_topic": micro_id,
-            "asset_type": "MCQ" if asset_type == "mcq" else "PYQ",
+            "asset_type": "MCQ" if asset_kind == "mcq" else "PYQ",
             "total_questions": 0,
             "questions": []
         }
+        starting_id = 1
 
         if os.path.exists(output_path):
             try:
                 with open(output_path, "r", encoding="utf-8") as f:
                     existing_data = json.load(f)
-                    q_list = existing_data.get("questions", [])
-                    if q_list:
-                        starting_id = max(q.get("id", 0) for q in q_list) + 1
+                    questions_list = existing_data.get("questions", [])
+                    if questions_list:
+                        max_id = max(q.get("id", 0) for q in questions_list)
+                        starting_id = max_id + 1
             except Exception as e:
-                print(f"[WARN] Error reading existing JSON {output_path}: {e}")
+                print(f"[WARN] Corrupt JSON {output_path}: {e}. Creating backup.")
+                os.rename(output_path, f"{output_path}.bak_{int(time.time())}")
 
-        new_items = parse_mcq_file(input_path, starting_id)
-        if not new_items:
+        new_questions = parse_raw_file(input_path, starting_id)
+        if not new_questions:
             print(f"[SKIP] No valid questions parsed from: {input_path}")
-            FILE_MTIME_CACHE[input_path] = current_mtime
             return
 
-        existing_data["questions"].extend(new_items)
+        existing_data["questions"].extend(new_questions)
         existing_data["total_questions"] = len(existing_data["questions"])
         existing_data["last_updated"] = datetime.now().isoformat()
-        final_payload = existing_data
-        log_msg = f"Appended {len(new_items)} questions to {output_path} (Total: {final_payload['total_questions']})"
 
-    elif asset_type == "concept":
-        final_payload = parse_concept_text(input_path, micro_id)
-        if not final_payload or not final_payload.get("sections"):
-            print(f"[SKIP] No valid concept sections parsed from: {input_path}")
-            FILE_MTIME_CACHE[input_path] = current_mtime
-            return
-        log_msg = f"Generated Concept JSON ({final_payload['sections_count']} sections) -> {output_path}"
+        temp_output_path = f"{output_path}.tmp"
+        with open(temp_output_path, "w", encoding="utf-8") as f:
+            json.dump(existing_data, f, ensure_ascii=False, indent=2)
+        os.replace(temp_output_path, output_path)
+        print(f"[SUCCESS] Appended {len(new_questions)} questions to {output_path} (Total: {existing_data['total_questions']})")
 
-    elif asset_type == "notes":
-        final_payload = parse_short_notes_text(input_path, micro_id)
-        if not final_payload or not final_payload.get("bullet_points"):
-            print(f"[SKIP] No valid short notes points parsed from: {input_path}")
-            FILE_MTIME_CACHE[input_path] = current_mtime
-            return
-        log_msg = f"Generated Short Notes JSON ({final_payload['total_points']} points) -> {output_path}"
-    else:
-        return
-
-    # 3. एटॉमिक राइट (.tmp -> .json)
-    temp_output_path = f"{output_path}.tmp"
-    with open(temp_output_path, "w", encoding="utf-8") as f:
-        json.dump(final_payload, f, ensure_ascii=False, indent=2)
-    os.replace(temp_output_path, output_path)
-    print(f"[SUCCESS] {log_msg}")
-
-    # 4. आर्काइविंग (.txt -> .processed_<timestamp>.txt)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     archive_name = input_filename.replace(".txt", f".processed_{timestamp}.txt")
     archive_path = os.path.join(dirpath, archive_name)
     os.rename(input_path, archive_path)
     print(f"[ARCHIVE] Renamed {input_filename} -> {archive_name}")
 
-    if input_path in FILE_MTIME_CACHE:
-        del FILE_MTIME_CACHE[input_path]
+    # Update master manifest and rebuild PWA distribution bundles automatically
+    index_tracker.sync_master_manifest(ROOT_DIR)
+    if build_catalog:
+        build_catalog.build_distribution()
 
-    # 5. मास्टर इंडेक्स ट्रैकर सिंक (यदि उपलब्ध हो)
-    try:
-        import index_tracker
-        index_tracker.sync_master_manifest(ROOT_DIR)
-    except (ImportError, AttributeError):
-        pass
-
-
-# ================= Monitoring Daemon Loop =================
 
 def run_monitor():
-    """बैकग्राउंड डायरेक्टरी ट्री मॉनिटर लूप।"""
     print("=" * 60)
-    print("[SISKILL ENGINE] Background Sync Daemon Active (v2.0.0)")
+    print("[SISKILL ENGINE v3.5] Background Sync Daemon Active")
     print(f"Monitoring Root: {os.path.abspath(ROOT_DIR)}")
-    print("Watching for: " + ", ".join(TARGET_CONFIG.keys()))
-    print(f"Polling Interval: {POLL_INTERVAL_SECONDS} seconds | Press Ctrl+C to stop.")
+    print("Watching for: MCQ.txt | PYQ.txt | Concept.txt | Short_Notes.txt")
+    print("Press Ctrl+C to stop.")
     print("=" * 60)
 
-    while True:
-        try:
+    try:
+        while True:
             for root, dirs, files in os.walk(ROOT_DIR):
-                for input_file, cfg in TARGET_CONFIG.items():
+                if "dist_assets" in root or ".git" in root or "__pycache__" in root:
+                    continue
+                for input_file, output_info in TARGET_INPUTS.items():
                     if input_file in files:
-                        process_file(root, input_file, cfg)
-
-            time.sleep(POLL_INTERVAL_SECONDS)
-
-        except KeyboardInterrupt:
-            print("\n[STOPPED] Sync Engine cleanly stopped by user.")
-            break
-        except Exception as err:
-            print(f"[UNEXPECTED ERROR] {err}")
-            time.sleep(POLL_INTERVAL_SECONDS)
+                        print(f"\n[DETECTED] New input file found: {os.path.join(root, input_file)}")
+                        process_file(root, input_file, output_info)
+            time.sleep(POLL_INTERVAL)
+    except KeyboardInterrupt:
+        print("\n[STOPPED] Sync Engine shut down gracefully.")
 
 
 if __name__ == "__main__":

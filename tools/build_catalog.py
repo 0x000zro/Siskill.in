@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-SISKILL Distribution Bundler
-Converts 3,842 scattered asset files into 6 Subject Bundles and 1 Master Catalog.
+SISKILL Distribution Bundler (v3.0 - Collision-Proof & Verified)
+Compiles 3,842 individual asset files into 6 Subject Bundles and 1 Master Catalog.
 """
 
 import os
@@ -26,43 +26,55 @@ def build_distribution():
     os.makedirs(DIST_DIR, exist_ok=True)
     master_catalog = {
         "generated_at": datetime.now().isoformat(),
+        "total_subjects": len(INDEX_MAP),
         "subjects": []
     }
 
-    print("[BUILD] Compiling 3,842 files into optimized bundles...")
+    print("=" * 60)
+    print("[SISKILL BUNDLER v3.0] Compiling Assets into Distribution Packages")
+    print("=" * 60)
 
     for sub_id, index_rel in INDEX_MAP.items():
         index_path = os.path.join(ROOT_DIR, index_rel)
         if not os.path.exists(index_path):
+            print(f"[WARN] Index file missing: {index_path}. Skipping.")
             continue
 
         with open(index_path, "r", encoding="utf-8") as f:
             sub_meta = json.load(f)
 
-        sub_dir = sub_meta.get("subject", {}).get("directory", "")
+        sub_dir = sub_meta.get("subject", {}).get("directory", os.path.dirname(index_rel))
         subject_bundle = {
             "id": sub_id,
-            "name_en": sub_meta.get("subject", {}).get("name_en"),
-            "name_hi": sub_meta.get("subject", {}).get("name_hi"),
-            "micro_topics": {}  # id -> { Concept, Short_Notes, MCQ, PYQ }
+            "name_en": sub_meta.get("subject", {}).get("name_en", sub_id),
+            "name_hi": sub_meta.get("subject", {}).get("name_hi", sub_id),
+            "compiled_at": datetime.now().isoformat(),
+            "micro_topics": {}
         }
 
         catalog_topics = []
+        sub_mcq_total = 0
+        sub_pyq_total = 0
 
-        for t in sub_meta.get("topics", []):
-            t_folder = t.get("folder", "")
+        for t_idx, t in enumerate(sub_meta.get("topics", []), 1):
+            t_folder = t.get("folder", t.get("slug", ""))
+            t_id = t.get("id", f"T{t_idx:02d}")
             cat_subtopics = []
 
-            for st in t.get("subtopics", []):
-                st_folder = st.get("folder", "")
+            for st_idx, st in enumerate(t.get("subtopics", []), 1):
+                st_folder = st.get("folder", st.get("slug", ""))
+                st_id = st.get("id", f"{t_id}_ST{st_idx:02d}")
                 cat_micros = []
 
-                for m in st.get("micro_topics", []):
-                    m_id = m.get("id")
-                    m_folder = m.get("folder", "")
+                for m_idx, m in enumerate(st.get("micro_topics", []), 1):
+                    m_folder = m.get("folder", m.get("slug", ""))
+                    raw_m_id = m.get("id", m.get("micro_id", m_folder))
+
+                    # Collision-proof ID: if raw_m_id already exists in bundle, scope it with st_id
+                    m_id = raw_m_id if raw_m_id and raw_m_id not in subject_bundle["micro_topics"] else f"{st_id}_{m_folder or m_idx}"
+
                     target_dir = os.path.join(ROOT_DIR, sub_dir, t_folder, st_folder, m_folder)
 
-                    # माइक्रो-टॉपिक के सभी एसेट्स को एक स्थान पर संकलित करना
                     assets_data = {}
                     for asset_name in ["Concept", "Short_Notes", "MCQ", "PYQ", "Practice"]:
                         a_path = os.path.join(target_dir, f"{asset_name}.json")
@@ -75,48 +87,59 @@ def build_distribution():
 
                     subject_bundle["micro_topics"][m_id] = assets_data
 
+                    mcq_count = len(assets_data.get("MCQ", {}).get("questions", []))
+                    pyq_count = len(assets_data.get("PYQ", {}).get("questions", []))
+                    sub_mcq_total += mcq_count
+                    sub_pyq_total += pyq_count
+
                     cat_micros.append({
                         "id": m_id,
-                        "name_hi": m.get("name_hi"),
-                        "name_en": m.get("name_en", m.get("slug")),
-                        "mcq_count": len(assets_data.get("MCQ", {}).get("questions", [])),
-                        "pyq_count": len(assets_data.get("PYQ", {}).get("questions", []))
+                        "name_hi": m.get("name_hi", m_folder),
+                        "name_en": m.get("name_en", m.get("slug", m_folder)),
+                        "folder": m_folder,
+                        "mcq_count": mcq_count,
+                        "pyq_count": pyq_count,
+                        "has_concept": "Concept" in assets_data,
+                        "has_short_notes": "Short_Notes" in assets_data
                     })
 
                 cat_subtopics.append({
-                    "id": st.get("id"),
-                    "name_hi": st.get("name_hi"),
-                    "name_en": st.get("name_en", st.get("slug")),
+                    "id": st_id,
+                    "name_hi": st.get("name_hi", st_folder),
+                    "name_en": st.get("name_en", st.get("slug", st_folder)),
                     "micro_topics": cat_micros
                 })
 
             catalog_topics.append({
-                "id": t.get("id"),
-                "name_hi": t.get("name_hi"),
-                "name_en": t.get("name_en", t.get("slug")),
+                "id": t_id,
+                "name_hi": t.get("name_hi", t_folder),
+                "name_en": t.get("name_en", t.get("slug", t_folder)),
                 "subtopics": cat_subtopics
             })
 
-        # 1. विषय का सम्पूर्ण बंडल सुरक्षित करें
         bundle_file = os.path.join(DIST_DIR, f"bundle_{sub_id}.json")
         with open(bundle_file, "w", encoding="utf-8") as bf:
             json.dump(subject_bundle, bf, ensure_ascii=False)
 
-        # 2. कैटलॉग में विषय की संरचना जोड़ें
         master_catalog["subjects"].append({
             "id": sub_id,
-            "name_en": sub_meta.get("subject", {}).get("name_en"),
-            "name_hi": sub_meta.get("subject", {}).get("name_hi"),
-            "bundle_url": f"dist_assets/bundle_{sub_id}.json",
+            "name_en": sub_meta.get("subject", {}).get("name_en", sub_id),
+            "name_hi": sub_meta.get("subject", {}).get("name_hi", sub_id),
+            "bundle_file": f"bundle_{sub_id}.json",
+            "total_mcqs": sub_mcq_total,
+            "total_pyqs": sub_pyq_total,
+            "total_questions": sub_mcq_total + sub_pyq_total,
             "topics": catalog_topics
         })
-        print(f"  [✓] Bundled {sub_id} -> {bundle_file}")
+        print(f"  [✓] Bundled {sub_id:<6} -> {bundle_file} (Topics: {len(catalog_topics)}, MCQs: {sub_mcq_total}, PYQs: {sub_pyq_total})")
 
-    # 3. मास्टर कैटलॉग सुरक्षित करें
     cat_file = os.path.join(DIST_DIR, "master_catalog.json")
     with open(cat_file, "w", encoding="utf-8") as cf:
-        json.dump(master_catalog, cf, ensure_ascii=False)
-    print(f"\n[SUCCESS] Master Catalog Created -> {cat_file}")
+        json.dump(master_catalog, cf, ensure_ascii=False, indent=2)
+
+    print("=" * 60)
+    print(f"[SUCCESS] Master Catalog generated -> {cat_file}")
+    print("=" * 60)
 
 if __name__ == "__main__":
     build_distribution()

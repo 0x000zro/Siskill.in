@@ -1,0 +1,18 @@
+{
+  "name": "SISKILL - Super Intelligent Learning Skill",
+  "short_name": "SISKILL",
+  "description": "Super Intelligent Learning Skill - Offline-First Question Bank & Mock Test Platform",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#1e3a8a",
+  "theme_color": "#1e3a8a",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

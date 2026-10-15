@@ -72,8 +72,8 @@
       "framework_version": "1.0.0",
       "taxonomy_version": "1.0.0",
       "mcq_count": 30,
-      "pyq_count": 37,
-      "total_questions": 67
+      "pyq_count": 97,
+      "total_questions": 127
     },
     {
       "id": "HINDI",
@@ -153,8 +153,8 @@
   "package_name": "in.siskill.app",
   "global_stats": {
     "overall_mcq_count": 30,
-    "overall_pyq_count": 37,
-    "overall_total_questions": 67,
-    "last_synced": "2026-10-13T15:08:37.537404"
+    "overall_pyq_count": 97,
+    "overall_total_questions": 127,
+    "last_synced": "2026-10-15T11:57:05.975740"
   }
 }
