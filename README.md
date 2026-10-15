@@ -1,6 +1,4 @@
 # Siskill.in
-टर्मिनल (~/Guru_G_SI_Skill) में सीधे README.md फ़ाइल जनरेट करने के लिए नीचे दी गई cat << 'EOF' कमांड चलाएँ:
-cat << 'EOF' > README.md
 # 📖 SISKILL — Super Intelligent Learning Skill
 
 [![Platform](https://img.shields.io/badge/Platform-Offline--First%20PWA-1e3a8a?style=for-the-badge)](./index.html)
