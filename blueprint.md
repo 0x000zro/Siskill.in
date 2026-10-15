@@ -1,6 +1,6 @@
 # 📘 SISKILL — Master Production Architecture & Engineering Blueprint
 **Tagline:** *Super Intelligent Learning Skill*  
-**Repository:** `~/Guru_G_SI_Skill`  
+**Repository:** `~/Skill.in`  
 **Target Domain:** CTET & UPTET (Paper 1 & Paper 2) Offline-First Educational Ecosystem  
 **Document Version:** 2.5.0 (Production-Ready Release)
 
